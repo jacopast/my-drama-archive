@@ -5,61 +5,66 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import json
+from duckduckgo_search import DDGS  # 🔍 이미지 검색용 도구 추가
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="My Media Archive", page_icon="🎬", layout="wide")
 
-# --- 1. 구글 시트 & AI 연결 함수 ---
+# --- 1. 구글 시트 연결 ---
 def get_sheet_connection():
-    # Streamlit의 비밀 공간(Secrets)에서 키를 가져옴
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    # secrets.toml 파일 구조에 맞춰서 dict로 변환
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    return client.open("media_db").sheet1  # 시트 이름 'media_db' 필수!
+    return client.open("media_db").sheet1
 
+# --- 2. 진짜 이미지 찾기 (NEW!) ---
+def search_image_url(query):
+    """DuckDuckGo 검색 엔진으로 실제 이미지 주소를 가져옴"""
+    try:
+        with DDGS() as ddgs:
+            # "제목 + 포스터"로 검색해서 첫 번째 이미지 가져오기
+            results = list(ddgs.images(f"{query} 포스터", max_results=1))
+            if results:
+                return results[0]['image']
+    except Exception as e:
+        print(f"이미지 검색 실패: {e}")
+    return "https://via.placeholder.com/300x450?text=No+Image" # 실패 시 대체 이미지
+
+# --- 3. AI 분석 ---
 def analyze_content(title, user_comment):
-    # Gemini AI에게 정보 추론 시키기
     genai.configure(api_key=st.secrets["gemini_api_key"])
+    # 모델명은 최신 버전 유지
     model = genai.GenerativeModel("gemini-2.5-flash")
     
     prompt = f"""
     작품명: '{title}'
     사용자 코멘트: '{user_comment}'
     
-    위 정보를 바탕으로 아래 4가지 정보를 추론해서 오직 JSON 형식으로만 답해줘. (다른 말 하지마)
+    위 정보를 바탕으로 아래 3가지 정보를 추론해서 오직 JSON 형식으로만 답해줘. (이미지 URL은 빼고!)
     
     1. platform: Netflix, Disney+, Prime Video, Apple TV+, Watcha, TVING, Wavve, Cinema 중 가장 유력한 곳 1개. (모르면 OTT)
     2. rating: 사용자의 코멘트 뉘앙스를 분석해 1.0~5.0 사이 점수 (0.5 단위). 
-       - 부정적/욕설/실망/하차/별로/어휴 -> 1.0 ~ 2.5
-       - 보통/킬링타임/볼만함 -> 3.0 ~ 3.5
-       - 추천/좋음/수작/재밌음 -> 4.0 ~ 4.5
-       - 인생작/최고/미쳤다/압도적 -> 5.0
     3. release_date: 이 작품의 최초 공개일 (YYYY-MM-DD). 검색해서 정확히 찾아줘.
-    4. image_url: 이 작품의 공식 포스터 이미지 URL (구글 검색 최상단 결과).
     
     JSON 예시:
     {{
         "platform": "Netflix",
         "rating": 4.5,
-        "release_date": "2025-01-01",
-        "image_url": "https://image.tmdb.org/..."
+        "release_date": "2025-01-01"
     }}
     """
     try:
         response = model.generate_content(prompt)
-        # JSON 부분만 발라내기
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_text)
     except Exception as e:
         st.error(f"AI 분석 실패: {e}")
         return None
 
-# --- 2. 화면 구성 (UI) ---
+# --- 4. 화면 구성 ---
 st.title("🎬 Yoon's Media Archive")
 
-# 탭 구성
 tab1, tab2 = st.tabs(["📝 기록하기", "📊 통계/히스토리"])
 
 # [탭 1] 입력 화면
@@ -79,17 +84,19 @@ with tab1:
             if not input_title or not input_comment:
                 st.warning("작품명과 한 줄 평은 필수입니다!")
             else:
-                with st.spinner("🤖 AI가 정보를 찾고 있습니다..."):
+                with st.spinner("🔍 포스터를 검색하고 정보를 분석 중..."):
+                    # 1. AI로 텍스트 정보 분석
                     ai_data = analyze_content(input_title, input_comment)
                     
+                    # 2. 검색 엔진으로 실제 이미지 찾기 (여기가 핵심!)
+                    real_image_url = search_image_url(input_title)
+                    
                     if ai_data:
-                        # 날짜 로직: 입력값 없으면 개봉일 사용
                         if input_date:
                             final_date = input_date.strftime("%Y-%m-%d")
                         else:
                             final_date = ai_data.get('release_date', datetime.now().strftime("%Y-%m-%d"))
 
-                        # 구글 시트 저장
                         try:
                             sheet = get_sheet_connection()
                             row_data = [
@@ -99,10 +106,14 @@ with tab1:
                                 ai_data['rating'],
                                 input_comment,
                                 ai_data['release_date'],
-                                ai_data['image_url']
+                                real_image_url  # 진짜 찾은 이미지 주소 넣기
                             ]
                             sheet.append_row(row_data)
-                            st.success(f"**[{input_title}]** 저장 완료! (★{ai_data['rating']} / {ai_data['platform']})")
+                            
+                            # 저장 성공 메시지와 함께 찾은 이미지 보여주기
+                            st.success(f"**[{input_title}]** 저장 완료!")
+                            st.image(real_image_url, width=200, caption="검색된 포스터")
+                            
                         except Exception as e:
                             st.error(f"구글 시트 저장 실패: {e}")
 
@@ -117,16 +128,18 @@ with tab2:
         df = pd.DataFrame(records)
 
         if not df.empty:
-            # 상단 요약
             c1, c2, c3 = st.columns(3)
             c1.metric("총 감상", f"{len(df)}편")
             c2.metric("평균 별점", f"★ {df['Rating'].mean():.1f}")
-            best_movie = df.loc[df['Rating'].idxmax()]
-            c3.metric("최고 평점", f"{best_movie['Title']}")
+            try:
+                best_movie = df.loc[df['Rating'].idxmax()]
+                c3.metric("최고 평점", f"{best_movie['Title']}")
+            except:
+                pass
             
             st.divider()
             
-            # 갤러리 뷰 (최신순)
+            # 갤러리 스타일 (최신순)
             st.markdown("### 🗂️ Recent Log")
             df = df.sort_values(by="Date", ascending=False)
             
@@ -137,14 +150,14 @@ with tab2:
                         try:
                             st.image(row['Image'], use_container_width=True)
                         except:
-                            st.write("No Image")
+                            st.error("이미지 로딩 실패")
                     with c_txt:
                         st.subheader(f"{row['Title']} (★{row['Rating']})")
                         st.caption(f"{row['Date']} 시청 | {row['Platform']} | {row['ReleaseDate']} 개봉")
                         st.info(f"🗣️ {row['Comment']}")
                     st.divider()
         else:
-            st.info("아직 데이터가 없습니다. 첫 기록을 남겨보세요!")
+            st.info("데이터가 없습니다.")
 
     except Exception as e:
-        st.error("데이터를 불러올 수 없습니다. (설정 확인 필요)")
+        st.error(f"데이터 로딩 오류: {e}")
