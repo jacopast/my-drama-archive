@@ -22,7 +22,7 @@ def get_sheet_connection():
 def analyze_content(title, user_comment):
     # Gemini AI에게 정보 추론 시키기
     genai.configure(api_key=st.secrets["gemini_api_key"])
-    model = genai.GenerativeModel("gemini-pro")
+    model = genai.GenerativeModel("gemini-1.5-flash")
     
     prompt = f"""
     작품명: '{title}'
