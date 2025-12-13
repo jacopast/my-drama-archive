@@ -148,3 +148,12 @@ with tab2:
 
     except Exception as e:
         st.error("데이터를 불러올 수 없습니다. (설정 확인 필요)")
+
+# 디버깅용 코드 (잠시 추가했다가 나중에 지우세요)
+try:
+    st.write("--- 🔍 사용 가능한 모델 목록 ---")
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            st.write(m.name)
+except Exception as e:
+    st.error(f"키 문제 확인 필요: {e}")
