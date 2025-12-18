@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import google.generativeai as genai # 구관이 명관 (안정적인 구버전)
+import google.generativeai as genai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
@@ -47,13 +47,12 @@ def get_tmdb_image(query):
         pass
     return ""
 
-# --- 3. AI 분석 (가장 안정적인 방식) ---
+# --- 3. AI 분석 (가장 확실한 gemini-pro 사용 🚨) ---
 def analyze_content(title, combined_comment):
-    # 구버전 라이브러리 설정 방식
     genai.configure(api_key=st.secrets["gemini_api_key"])
     
-    # 모델: 안정적이고 무료 한도가 높은 1.5 Flash 사용
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    # [수정됨] 1.5-flash 대신 가장 호환성 좋은 'gemini-pro' 사용
+    model = genai.GenerativeModel("gemini-pro")
     
     prompt = f"""
     작품명: '{title}'
@@ -171,36 +170,4 @@ with tab2:
             target_df = df[df['Date'].dt.year == datetime.now().year] if filter_option == "올해 (2025)" else df
 
             if not target_df.empty:
-                total_min = target_df['RunningTime'].sum()
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("총 편수", f"{len(target_df)}편")
-                m2.metric("총 시간", f"{int(total_min//60)}시간 {int(total_min%60)}분")
-                m3.metric("평균 별점", f"{target_df['Rating'].mean():.1f}")
-                best = target_df.loc[target_df['Rating'].idxmax()]
-                m4.metric("최고작", f"{best['Title']}")
-                
-                st.divider()
-                st.subheader("🏆 믿고 보는 제작진 (My Favorites)")
-                high_rated_df = target_df[target_df['Rating'] >= 4.0]
-                all_names = [name.strip() for names in high_rated_df['CastCrew'] for name in names.split(',') if name]
-                if all_names:
-                    counts = Counter(all_names).most_common(7)
-                    cols = st.columns(len(counts))
-                    for i, (n, c) in enumerate(counts):
-                        cols[i].markdown(f"**{i+1}위**\n\n{n} ({c}회)")
-                
-                st.divider()
-                st.subheader("📝 Review Log")
-                target_df = target_df.sort_values(by="Date", ascending=False)
-                for i, r in target_df.iterrows():
-                    with st.container():
-                        c1, c2 = st.columns([1, 4])
-                        if r['Image'] and str(r['Image']).startswith('http'): c1.image(r['Image'], width=100)
-                        else: c1.markdown("## 🎬")
-                        c2.markdown(f"#### {r['Title']} <span style='color:orange'>{get_star_string(r['Rating'])}</span>", unsafe_allow_html=True)
-                        c2.caption(f"{r['Date'].strftime('%Y-%m-%d')} | {r['Platform']} | ⏳ {int(r['RunningTime'])}분 | {r['CastCrew']}")
-                        c2.write(f"🗣️ {r['Comment']}")
-                    st.divider()
-            else: st.warning("데이터가 없습니다.")
-        else: st.info("데이터가 없습니다.")
-    except Exception as e: st.error(f"오류: {e}")
+                total_min = target_df['Running
