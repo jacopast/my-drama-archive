@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from google import genai # 🚨 새로운 AI 도구 불러오기
+from google import genai # 최신 라이브러리 사용
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
@@ -47,9 +47,8 @@ def get_tmdb_image(query):
         pass
     return ""
 
-# --- 3. AI 분석 (새로운 google-genai 방식 적용 🚨) ---
+# --- 3. AI 분석 (안정적인 1.5 Flash 모델 사용 🟢) ---
 def analyze_content(title, combined_comment):
-    # 새로운 클라이언트 연결 방식
     client = genai.Client(api_key=st.secrets["gemini_api_key"])
     
     prompt = f"""
@@ -74,15 +73,16 @@ def analyze_content(title, combined_comment):
     }}
     """
     try:
-        # 새로운 호출 방식
+        # 여기가 변경되었습니다: gemini-2.0 -> gemini-1.5-flash
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-1.5-flash",
             contents=prompt
         )
         
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_text)
     except Exception as e:
+        # 에러가 나면 화면에 보여줌
         st.error(f"AI 분석 실패: {e}")
         return None
 
@@ -112,7 +112,6 @@ with tab1:
                     all_records = sheet.get_all_records()
                     df_existing = pd.DataFrame(all_records)
                     
-                    # 중복 확인
                     existing_row_index = -1
                     combined_comment = input_comment
                     
