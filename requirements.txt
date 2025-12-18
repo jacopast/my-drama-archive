@@ -3,5 +3,4 @@ pandas
 google-generativeai
 gspread
 oauth2client
-duckduckgo-search
 requests
