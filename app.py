@@ -5,7 +5,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import json
-import requests # 통신 도구
+import requests
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="My Media Archive", page_icon="🎬", layout="wide")
@@ -18,54 +18,32 @@ def get_sheet_connection():
     client = gspread.authorize(creds)
     return client.open("media_db").sheet1
 
-# --- 2. TMDB 이미지 찾기 (디버깅 모드 🚨) ---
-def get_tmdb_image(query):
+# --- 2. 애플(iTunes) 이미지 검색 (키 필요 없음) ---
+def get_itunes_image(query):
     try:
-        # 1. 키 확인
-        api_key = st.secrets.get("tmdb_api_key")
-        if not api_key:
-            st.error("🚨 TMDB 키가 Secrets에 없습니다!")
-            return ""
-            
-        # 2. 검색 요청
-        url = f"https://api.themoviedb.org/3/search/multi?api_key={api_key}&query={query}&language=ko-KR&page=1"
+        url = f"https://itunes.apple.com/search?term={query}&country=KR&media=all&limit=1"
         response = requests.get(url)
-        
-        # 3. 응답 코드 확인 (200이 아니면 에러)
-        if response.status_code != 200:
-            st.error(f"🚨 TMDB 연결 실패! 상태 코드: {response.status_code}")
-            st.write(response.text) # 에러 내용 보여주기
-            return ""
-
         data = response.json()
-        
-        if data['results']:
-            poster_path = data['results'][0].get('poster_path')
-            if poster_path:
-                return f"https://image.tmdb.org/t/p/w500{poster_path}"
-            else:
-                st.warning(f"검색은 됐는데 포스터가 없네요. (검색어: {query})")
-        else:
-            st.warning(f"TMDB에서 검색 결과가 없습니다. (검색어: {query})")
-            
-    except Exception as e:
-        st.error(f"🚨 이미지 검색 중 에러 발생: {e}")
-    
+        if data['resultCount'] > 0:
+            artwork = data['results'][0].get('artworkUrl100')
+            return artwork.replace('100x100bb', '600x600bb') 
+    except:
+        pass
     return ""
 
-# --- 3. AI 분석 ---
-def analyze_content(title, user_comment):
+# --- 3. AI 분석 (내용을 합쳐서 새로 분석할 수 있게 함) ---
+def analyze_content(title, combined_comment):
     genai.configure(api_key=st.secrets["gemini_api_key"])
     model = genai.GenerativeModel("gemini-2.5-flash")
     
     prompt = f"""
     작품명: '{title}'
-    사용자 코멘트: '{user_comment}'
+    누적 코멘트: '{combined_comment}'
     
-    위 정보를 바탕으로 JSON 형식으로만 답해줘.
+    위의 모든 코멘트 내용을 종합해서 JSON 형식으로만 답해줘.
     
     1. platform: Netflix, Disney+, Prime Video, Apple TV+, Watcha, TVING, Wavve, Cinema 중 1개.
-    2. rating: 1.0~5.0 사이 점수 (0.5 단위).
+    2. rating: 전체 코멘트의 뉘앙스를 종합해 1.0~5.0 사이 점수 (0.5 단위).
     3. release_date: 최초 공개일 (YYYY-MM-DD).
     
     JSON 예시:
@@ -88,69 +66,78 @@ st.title("🎬 Yoon's Media Archive")
 
 tab1, tab2 = st.tabs(["📝 기록하기", "📊 통계/히스토리"])
 
-# [탭 1] 입력 화면
 with tab1:
-    with st.form("entry_form", clear_on_submit=False): # 디버깅 위해 자동지움 끔
+    with st.form("entry_form", clear_on_submit=True):
         col1, col2 = st.columns([3, 1])
         with col1:
-            input_title = st.text_input("작품명", placeholder="예: 오징어 게임")
-            input_comment = st.text_input("한 줄 평", placeholder="예: 3편이 제일 재밌네")
+            input_title = st.text_input("작품명", placeholder="예: 얄미운 사랑")
+            input_comment = st.text_input("새로운 한 줄 평", placeholder="예: 12화부터 지루함")
         with col2:
             input_date = st.date_input("본 날짜 (선택)", value=None)
             
-        submitted = st.form_submit_button("테스트 저장 💾")
+        submitted = st.form_submit_button("기록 저장 💾")
 
         if submitted:
-            if not input_title:
-                st.warning("작품명을 입력하세요.")
+            if not input_title or not input_comment:
+                st.warning("작품명과 코멘트를 입력하세요.")
             else:
-                with st.spinner("🔍 분석 중..."):
-                    # 1. AI 분석
-                    ai_data = analyze_content(input_title, input_comment)
+                with st.spinner("🔄 데이터 확인 및 AI 분석 중..."):
+                    sheet = get_sheet_connection()
+                    all_records = sheet.get_all_records()
+                    df_existing = pd.DataFrame(all_records)
                     
-                    # 2. TMDB 이미지 검색 (에러나면 화면에 뜸)
-                    real_image_url = get_tmdb_image(input_title)
+                    # 중복 확인 (제목 기준)
+                    existing_row_index = -1
+                    combined_comment = input_comment
+                    
+                    if not df_existing.empty and input_title in df_existing['Title'].values:
+                        # 이미 있는 경우: 기존 데이터 찾기
+                        idx = df_existing[df_existing['Title'] == input_title].index[0]
+                        existing_row_index = idx + 2 # 헤더(1) + 0부터 시작하는 인덱스(1) = +2
+                        old_comment = df_existing.iloc[idx]['Comment']
+                        combined_comment = f"{old_comment} / {input_comment}"
+                        st.info(f"📍 기존 기록을 발견했습니다! 내용을 합쳐서 업데이트합니다.")
+
+                    # AI 분석 (합쳐진 코멘트로 점수 재산정)
+                    ai_data = analyze_content(input_title, combined_comment)
                     
                     if ai_data:
-                        if input_date:
-                            final_date = input_date.strftime("%Y-%m-%d")
-                        else:
-                            final_date = ai_data.get('release_date', datetime.now().strftime("%Y-%m-%d"))
+                        final_date = input_date.strftime("%Y-%m-%d") if input_date else ai_data.get('release_date', datetime.now().strftime("%Y-%m-%d"))
+                        real_image_url = get_itunes_image(input_title)
+                        
+                        row_data = [
+                            final_date,
+                            input_title,
+                            ai_data['platform'],
+                            ai_data['rating'],
+                            combined_comment,
+                            ai_data['release_date'],
+                            real_image_url
+                        ]
 
-                        # 구글 시트 저장
                         try:
-                            sheet = get_sheet_connection()
-                            row_data = [
-                                final_date,
-                                input_title,
-                                ai_data['platform'],
-                                ai_data['rating'],
-                                input_comment,
-                                ai_data['release_date'],
-                                real_image_url
-                            ]
-                            sheet.append_row(row_data)
-                            
-                            st.success(f"**[{input_title}]** 저장 완료!")
+                            if existing_row_index > 0:
+                                # 기존 행 업데이트 (A열부터 G열까지)
+                                sheet.update(f"A{existing_row_index}:G{existing_row_index}", [row_data])
+                                st.success(f"**[{input_title}]** 업데이트 완료! (점수: {ai_data['rating']})")
+                            else:
+                                # 새 행 추가
+                                sheet.append_row(row_data)
+                                st.success(f"**[{input_title}]** 신규 저장 완료!")
                             
                             if real_image_url:
-                                st.image(real_image_url, width=150, caption="성공!")
-                            else:
-                                st.error("이미지를 못 가져왔습니다. 위 에러 메시지를 확인하세요.")
-                                
+                                st.image(real_image_url, width=150)
                         except Exception as e:
-                            st.error(f"구글 시트 저장 실패: {e}")
+                            st.error(f"저장 실패: {e}")
 
-# [탭 2] 통계 화면
+# [탭 2] 통계 화면 (기존과 동일)
 with tab2:
     if st.button("새로고침 🔄"):
         st.rerun()
-        
     try:
         sheet = get_sheet_connection()
         records = sheet.get_all_records()
         df = pd.DataFrame(records)
-
         if not df.empty:
             c1, c2, c3 = st.columns(3)
             c1.metric("총 감상", f"{len(df)}편")
@@ -158,30 +145,20 @@ with tab2:
             try:
                 best_movie = df.loc[df['Rating'].idxmax()]
                 c3.metric("최고 평점", f"{best_movie['Title']}")
-            except:
-                pass
-            
+            except: pass
             st.divider()
-            
-            # 갤러리 뷰
-            st.markdown("### 🗂️ Recent Log")
             df = df.sort_values(by="Date", ascending=False)
-            
             for idx, row in df.iterrows():
                 with st.container():
                     c_img, c_txt = st.columns([1, 4])
                     with c_img:
                         if row['Image'] and str(row['Image']).startswith('http'):
                             st.image(row['Image'], width=100)
-                        else:
-                            st.markdown("## 🎬")
+                        else: st.markdown("## 🎬")
                     with c_txt:
                         st.subheader(f"{row['Title']} (★{row['Rating']})")
-                        st.caption(f"{row['Date']} 시청 | {row['Platform']} | {row['ReleaseDate']} 개봉")
+                        st.caption(f"{row['Date']} | {row['Platform']}")
                         st.info(f"🗣️ {row['Comment']}")
                     st.divider()
-        else:
-            st.info("데이터가 없습니다.")
-
-    except Exception as e:
-        st.error(f"데이터 로딩 오류: {e}")
+        else: st.info("데이터가 없습니다.")
+    except Exception as e: st.error(f"로딩 오류: {e}")
