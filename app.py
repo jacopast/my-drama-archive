@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from google import genai # 최신 라이브러리 사용
+import google.generativeai as genai # 구관이 명관 (안정적인 구버전)
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
@@ -47,9 +47,13 @@ def get_tmdb_image(query):
         pass
     return ""
 
-# --- 3. AI 분석 (안정적인 1.5 Flash 모델 사용 🟢) ---
+# --- 3. AI 분석 (가장 안정적인 방식) ---
 def analyze_content(title, combined_comment):
-    client = genai.Client(api_key=st.secrets["gemini_api_key"])
+    # 구버전 라이브러리 설정 방식
+    genai.configure(api_key=st.secrets["gemini_api_key"])
+    
+    # 모델: 안정적이고 무료 한도가 높은 1.5 Flash 사용
+    model = genai.GenerativeModel("gemini-1.5-flash")
     
     prompt = f"""
     작품명: '{title}'
@@ -73,16 +77,10 @@ def analyze_content(title, combined_comment):
     }}
     """
     try:
-        # 여기가 변경되었습니다: gemini-2.0 -> gemini-1.5-flash
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=prompt
-        )
-        
+        response = model.generate_content(prompt)
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_text)
     except Exception as e:
-        # 에러가 나면 화면에 보여줌
         st.error(f"AI 분석 실패: {e}")
         return None
 
